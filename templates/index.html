@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroState Real-Time EEG Analyzer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .main-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 25px;
+        }
+
+        .main-header h1 {
+            font-size: 28px;
+            color: #2d3436;
+            margin: 0;
+        }
+
+        .dashboard-container {
+            display: flex;
+            gap: 20px;
+            max-width: 1200px;
+            width: 100%;
+            justify-content: center;
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            padding: 30px;
+            flex: 1;
+            min-width: 450px;
+        }
+
+        h2 {
+            text-align: center;
+            font-size: 20px;
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #2d3436;
+            border-bottom: 2px solid #f0f2f5;
+            padding-bottom: 10px;
+        }
+
+        .input-group { margin-bottom: 15px; }
+
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: #636e72;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #dfe6e9;
+            border-radius: 8px;
+            font-size: 16px;
+            box-sizing: border-box;
+            background: #fafafa;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        button {
+            flex: 1;
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 700;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .btn-predict { background-color: #27ae60; color: white; }
+        .btn-stream { background-color: #3498db; color: white; }
+        .btn-stream.active { background-color: #e74c3c; }
+
+        .result-display {
+            background-color: #ebf5ff;
+            border: 2px solid #3498db;
+            border-radius: 12px;
+            padding: 18px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .result-display span {
+            font-size: 26px;
+            font-weight: 700;
+            color: #2980b9;
+        }
+
+        .chart-container {
+            height: 250px;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="main-header">
+        <span style="font-size: 32px;">🧠</span>
+        <h1>NeuroState Real-Time EEG Analyzer</h1>
+    </div>
+
+    <div class="dashboard-container">
+        <div class="card">
+            <h2>Current Activity</h2>
+            <form action="/predict" method="post" id="manualForm">
+                <div class="input-group">
+                    <label>Alpha Power (Relaxation)</label>
+                    <input type="number" name="alpha" id="inA" step="any" value="{{ alpha|default(0) }}">
+                </div>
+                <div class="input-group">
+                    <label>Beta Power (Alertness)</label>
+                    <input type="number" name="beta" id="inB" step="any" value="{{ beta|default(0) }}">
+                </div>
+                <div class="input-group">
+                    <label>Gamma Power (Focus)</label>
+                    <input type="number" name="gamma" id="inG" step="any" value="{{ gamma|default(0) }}">
+                </div>
+
+                <div class="button-row">
+                    <button type="submit" class="btn-predict">Manual Predict</button>
+                    <button type="button" id="streamBtn" class="btn-stream" onclick="toggleStream()">Start Live Stream</button>
+                </div>
+            </form>
+
+            <div class="result-display">
+                <span id="stateDisplay">State: {{ prediction_text.split(': ')[1] if prediction_text else "---" }}</span>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="barChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Emotional Trend</h2>
+            <div class="chart-container" style="height: 380px;">
+                <canvas id="lineChart"></canvas>
+            </div>
+           
+        </div>
+    </div>
+
+    <script>
+        let barChart, lineChart, streamInterval = null;
+        let historyData = JSON.parse(localStorage.getItem('eeg_history')) || Array(10).fill(0);
+        const emotionMap = { 'calm': 1, 'excited': 2, 'stress': 3 };
+
+        window.onload = () => {
+            const ctxBar = document.getElementById('barChart').getContext('2d');
+            barChart = new Chart(ctxBar, {
+                type: 'bar',
+                data: {
+                    labels: ['Alpha', 'Beta', 'Gamma'],
+                    datasets: [{
+                        data: [{{alpha|default(0)}}, {{beta|default(0)}}, {{gamma|default(0)}}],
+                        backgroundColor: ['#3498db', '#e74c3c', '#f1c40f'],
+                        borderRadius: 5
+                    }]
+                },
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, max: 100 } }
+                }
+            });
+
+            const ctxLine = document.getElementById('lineChart').getContext('2d');
+            lineChart = new Chart(ctxLine, {
+                type: 'line',
+                data: {
+                    labels: ['', '', '', '', '', '', '', '', '', ''],
+                    datasets: [{
+                        label: 'Emotion Level',
+                        data: historyData,
+                        borderColor: '#3498db',
+                        backgroundColor: 'rgba(52, 152, 219, 0.15)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 5,
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#3498db'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            min: 0, max: 4,
+                            ticks: {
+                                stepSize: 1,
+                                callback: function(value) {
+                                    return ['', 'Calm', 'Excited', 'Stress'][value];
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            checkManualUpdate();
+        };
+
+        function checkManualUpdate() {
+            const currentRes = document.getElementById('stateDisplay').innerText.replace("State: ", "").toLowerCase().trim();
+            if (currentRes !== "---") {
+                updateGraphHistory(currentRes);
+            }
+        }
+
+        function updateGraphHistory(stateName) {
+            const val = emotionMap[stateName] || 0;
+            if (val !== 0) {
+                historyData.push(val);
+                historyData.shift();
+                localStorage.setItem('eeg_history', JSON.stringify(historyData));
+                lineChart.data.datasets[0].data = historyData;
+                lineChart.update();
+            }
+        }
+
+        function toggleStream() {
+            const btn = document.getElementById('streamBtn');
+            if (streamInterval) {
+                clearInterval(streamInterval);
+                streamInterval = null;
+                btn.innerText = "Start Live Stream";
+                btn.classList.remove('active');
+            } else {
+                btn.innerText = "Stop Live Stream";
+                btn.classList.add('active');
+                streamInterval = setInterval(fetchLiveUpdate, 2000);
+            }
+        }
+
+        async function fetchLiveUpdate() {
+            const a = (Math.random() * 80).toFixed(2);
+            const b = (Math.random() * 80).toFixed(2);
+            const g = (Math.random() * 80).toFixed(2);
+
+            try {
+                const response = await fetch('/predict_live', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({alpha: a, beta: b, gamma: g})
+                });
+                const data = await response.json();
+
+                document.getElementById('inA').value = a;
+                document.getElementById('inB').value = b;
+                document.getElementById('inG').value = g;
+                document.getElementById('stateDisplay').innerText = "State: " + data.prediction;
+
+                barChart.data.datasets[0].data = [a, b, g];
+                barChart.update('none');
+
+                updateGraphHistory(data.prediction.toLowerCase());
+            } catch (err) {
+                console.error("Stream Error:", err);
+            }
+        }
+    </script>
+</body>
+</html>
